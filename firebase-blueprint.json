@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Inventory of cars available for sale.",
+      "type": "object",
+      "properties": {
+        "make": { "type": "string" },
+        "model": { "type": "string" },
+        "year": { "type": "number" },
+        "price": { "type": "number" },
+        "status": { "type": "string", "enum": ["available", "reserved", "sold"] },
+        "vin": { "type": "string" },
+        "mileage": { "type": "number" },
+        "engine": { "type": "string" },
+        "cylinders": { "type": "number" },
+        "entryDate": { "type": "string", "format": "date-time" },
+        "inShowroom": { "type": "boolean" },
+        "color": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["make", "model", "year", "price", "status"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "Potential customers interested in purchasing a vehicle.",
+      "type": "object",
+      "properties": {
+        "customerName": { "type": "string" },
+        "gender": { "type": "string", "enum": ["Hombre", "Mujer"] },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "age": { "type": "number" },
+        "city": { "type": "string" },
+        "source": { "type": "string" },
+        "status": { "type": "string", "enum": ["new", "contacted", "qualified", "test-drive", "negotiation", "closed-won", "closed-lost"] },
+        "purchaseMethod": { "type": "string", "enum": ["CONTADO", "CRÉDITO"] },
+        "interestedVehicleId": { "type": "string" },
+        "interestedVehicleModel": { "type": "string" },
+        "interestedVehicleYear": { "type": "number" },
+        "budget": { "type": "number" },
+        "downPayment": { "type": "number" },
+        "assignedTo": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "sellerName": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerName", "status", "createdAt"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "Scheduled events like test drives or follow-ups.",
+      "type": "object",
+      "properties": {
+        "leadId": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["test-drive", "delivery", "follow-up", "negotiation"] },
+        "status": { "type": "string", "enum": ["scheduled", "completed", "cancelled"] },
+        "notes": { "type": "string" }
+      },
+      "required": ["leadId", "date", "type", "status"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Application user profile.",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "sales_agent"] }
+      },
+      "required": ["displayName", "email", "role"]
+    },
+    "Seller": {
+      "title": "Seller",
+      "description": "Custom seller profile for session management.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "uid": { "type": "string" },
+        "pickerId": { "type": "string" }
+      },
+      "required": ["name", "role"]
+    }
+  },
+  "firestore": {
+    "/vehicles/{vehicleId}": {
+      "schema": "Vehicle",
+      "description": "Collection of vehicles in inventory."
+    },
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Main leads collection."
+    },
+    "/appointments/{appointmentId}": {
+      "schema": "Appointment",
+      "description": "Appointments for leads."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles."
+    },
+    "/sellers/{sellerId}": {
+      "schema": "Seller",
+      "description": "Custom sellers list for the pick-a-user login."
+    },
+    "/config/{configId}": {
+      "schema": "object",
+      "description": "System-wide configuration settings."
+    }
+  }
+}

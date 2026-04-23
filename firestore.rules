@@ -1,0 +1,118 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 1024 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Role check helper
+    function getSellerData() {
+      return get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        // Bootstrap via Google Email (Convert to lowercase to be safe)
+        request.auth.token.email.lower() == 'automotrizgomezmxl@gmail.com' ||
+        request.auth.token.email.lower() == 'jozzcolors@gmail.com' ||
+        // Fallback to database lookup
+        (exists(/databases/$(database)/documents/sellers/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    function isUser() {
+      return isSignedIn() && (
+        isAdmin() || 
+        (exists(/databases/$(database)/documents/sellers/$(request.auth.uid)) && getSellerData().role in ['admin', 'user'])
+      );
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidVehicle(data) {
+      return data.make is string && data.make.size() <= 64 &&
+             data.model is string && data.model.size() <= 64 &&
+             data.year is number &&
+             data.price is number &&
+             data.status in ['available', 'reserved', 'sold'];
+    }
+
+    function isValidLead(data) {
+      return data.customerName is string && data.customerName.size() <= 128 &&
+             data.status in ['new', 'contacted', 'qualified', 'test-drive', 'negotiation', 'closed-won', 'closed-lost'] &&
+             data.createdAt == request.time;
+    }
+
+    function isValidAppointment(data) {
+      return data.leadId is string &&
+             data.type in ['test-drive', 'delivery', 'follow-up', 'negotiation'] &&
+             data.status in ['scheduled', 'completed', 'cancelled'];
+    }
+
+    function isValidSeller(data) {
+      return data.name is string && data.name.size() <= 128 &&
+             data.role in ['admin', 'user'];
+    }
+
+    // --- Collections ---
+
+    match /vehicles/{vehicleId} {
+      allow read: if true; 
+      allow create: if isAdmin() && isValidVehicle(incoming());
+      allow update: if isAdmin() && isValidVehicle(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /leads/{leadId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidLead(incoming());
+      allow update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if isUser();
+      allow create: if isUser() && isValidAppointment(incoming());
+      allow update: if isUser() && isValidAppointment(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /sellers/{sellerId} {
+      allow read: if true;
+      
+      allow create: if (
+        isAdmin() ||
+        (isSignedIn() && request.auth.uid == sellerId) ||
+        (isSignedIn() && request.auth.token.email.lower() in ['automotrizgomezmxl@gmail.com', 'jozzcolors@gmail.com'])
+      ) && isValidSeller(incoming());
+      
+      allow update: if (isAdmin() || request.auth.uid == sellerId) && isValidSeller(incoming());
+      allow delete: if isAdmin() && sellerId != request.auth.uid;
+    }
+
+    match /config/{configId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --shadow-soft: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-vibrant: 0 10px 15px -3px rgba(16, 185, 129, 0.2);
+}
+
+@layer base {
+  body {
+    @apply antialiased text-slate-900 bg-slate-50;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-50;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-indigo-200 rounded-full hover:bg-indigo-300 transition-colors;
+  }
+}

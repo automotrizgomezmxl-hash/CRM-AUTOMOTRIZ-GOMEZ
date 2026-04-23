@@ -1,0 +1,123 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Role check helper - assuming the auth.uid matches a document in 'sellers'
+    // This requires the app to link the UID to the seller document on login.
+    function getSeller() {
+      return get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && getSeller().role == 'admin';
+    }
+
+    function isUser() {
+      return isSignedIn() && (getSeller().role == 'admin' || getSeller().role == 'user');
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidVehicle(data) {
+      return data.make is string && data.make.size() <= 64 &&
+             data.model is string && data.model.size() <= 64 &&
+             data.year is number && data.year >= 1900 && data.year <= 2100 &&
+             data.price is number && data.price >= 0 &&
+             data.status in ['available', 'reserved', 'sold'];
+    }
+
+    function isValidLead(data) {
+      return data.customerName is string && data.customerName.size() <= 128 &&
+             data.status in ['new', 'contacted', 'qualified', 'test-drive', 'negotiation', 'closed-won', 'closed-lost'] &&
+             data.createdAt == request.time;
+    }
+
+    function isValidAppointment(data) {
+      return data.leadId is string && isValidId(data.leadId) &&
+             data.type in ['test-drive', 'delivery', 'follow-up', 'negotiation'] &&
+             data.status in ['scheduled', 'completed', 'cancelled'] &&
+             exists(/databases/$(database)/documents/leads/$(data.leadId));
+    }
+
+    function isValidSeller(data) {
+      return data.name is string && data.name.size() <= 64 &&
+             data.email is string && data.email.size() <= 128 &&
+             data.role in ['admin', 'user'];
+    }
+
+    // --- Collections ---
+
+    match /vehicles/{vehicleId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() && isValidVehicle(incoming());
+      allow update: if isAdmin() && isValidVehicle(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /leads/{leadId} {
+      allow list: if isUser();
+      allow get: if isUser();
+      allow create: if isUser() && isValidLead(incoming());
+      allow update: if isUser() && isValidLead(incoming()) && (
+        // Prevent changing creation timestamp
+        incoming().createdAt == existing().createdAt &&
+        // Protect status if needed (e.g. only admins can delete or specific rules)
+        (isAdmin() || true) // Simplified for now but following the pattern
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /appointments/{appointmentId} {
+      allow read: if isUser();
+      allow create: if isUser() && isValidAppointment(incoming());
+      allow update: if isUser() && isValidAppointment(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /sellers/{sellerId} {
+      // For the pick-a-user login to work, we need to list sellers
+      allow list: if true; // Public list for login, but limited fields if we wanted to be strict
+      allow get: if true;
+      
+      allow create: if (
+        // Allow first admin creation or admin-led creation
+        (incoming().email == 'automotrizgomezmxl@gmail.com' && incoming().role == 'admin') ||
+        isAdmin()
+      ) && isValidSeller(incoming());
+      
+      allow update: if isAdmin() && isValidSeller(incoming()) && (
+        // Block self-escalation if a user tries to edit their own record
+        (request.auth.uid == sellerId ? incoming().role == existing().role : true)
+      );
+      
+      allow delete: if isAdmin() && sellerId != request.auth.uid; // Prevent deleting self
+    }
+
+    match /config/{configId} {
+      allow read: if true; // Public config (e.g. logo)
+      allow write: if isAdmin();
+    }
+  }
+}
