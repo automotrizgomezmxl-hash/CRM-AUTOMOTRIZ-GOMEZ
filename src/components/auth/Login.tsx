@@ -13,7 +13,7 @@ import {
   orderBy
 } from 'firebase/firestore';
 import { signInWithPopup, GoogleAuthProvider, signInAnonymously } from 'firebase/auth';
-import { db, auth } from '../../lib/firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { Seller } from '../../types';
 import { LogIn, Car, Loader2, AlertCircle, ChevronRight, Users, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -62,7 +62,7 @@ export default function Login({ onLogin, logoUrl }: LoginProps) {
         setLoadingSellers(false);
       },
       (err) => {
-        console.error("Error en listener de vendedores (Login):", err);
+        handleFirestoreError(err, OperationType.GET, 'sellers');
         setLoadingSellers(false);
         setError("Error al cargar equipo. Verifica tu conexión.");
       }

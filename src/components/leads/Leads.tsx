@@ -15,7 +15,8 @@ import {
   X,
   Trash2,
   AlertTriangle,
-  ShieldCheck
+  ShieldCheck,
+  History
 } from 'lucide-react';
 import { 
   collection, 
@@ -28,7 +29,7 @@ import {
   serverTimestamp,
   deleteDoc
 } from 'firebase/firestore';
-import { db, auth } from '../../lib/firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { Lead, LeadStatus, Seller } from '../../types';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -59,7 +60,8 @@ const LEAD_SOURCES = [
   'Facebook',
   'Pagina ANCA',
   'Campaña META',
-  'Recomendado'
+  'Recomendado',
+  'WHATSAPP'
 ];
 
 interface LeadsProps {
@@ -74,6 +76,7 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
   const [sellerFilter, setSellerFilter] = useState<string>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
@@ -132,7 +135,7 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
         setLoading(false);
       },
       (error) => {
-        console.error("Error en listener de prospectos:", error);
+        handleFirestoreError(error, OperationType.GET, 'leads');
         setLoading(false);
       }
     );
@@ -158,7 +161,7 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
         setSellers(Array.from(uniqueMap.values()));
       },
       (error) => {
-        console.error("Error en listener de vendedores:", error);
+        handleFirestoreError(error, OperationType.GET, 'sellers');
       }
     );
 
@@ -188,9 +191,8 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
       setToast({ message: 'prospecto eliminado correctamente', type: 'success' });
       setIsDeleting(null);
     } catch (error: any) {
-      console.error("Error deleting lead", error);
-      const errorMsg = error?.message || 'Error desconocido';
-      setToast({ message: `Error: ${errorMsg}`, type: 'error' });
+      handleFirestoreError(error, OperationType.DELETE, `leads/${id}`);
+      setToast({ message: `Error al eliminar el prospecto`, type: 'error' });
       setIsDeleting(null);
     }
   };
@@ -199,6 +201,27 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
     e.preventDefault();
     try {
       if (selectedLead?.id) {
+        // Track changes for history
+        const newHistory = [...(selectedLead.history || [])];
+        const changes: string[] = [];
+
+        if (formData.customerName !== selectedLead.customerName) changes.push(`Nombre: ${selectedLead.customerName} -> ${formData.customerName}`);
+        if (formData.email !== selectedLead.email) changes.push(`cambio de correo de ${selectedLead.email || 'N/A'} a ${formData.email || 'N/A'}`);
+        if (formData.phone !== selectedLead.phone) changes.push(`Teléfono: ${selectedLead.phone} -> ${formData.phone}`);
+        if (Number(formData.budget) !== selectedLead.budget) changes.push(`Presupuesto: $${selectedLead.budget?.toLocaleString() || 0} -> $${Number(formData.budget).toLocaleString()}`);
+        if (Number(formData.downPayment) !== selectedLead.downPayment) changes.push(`Enganche: $${selectedLead.downPayment?.toLocaleString() || 0} -> $${Number(formData.downPayment).toLocaleString()}`);
+        if (formData.notes !== selectedLead.notes) changes.push(`NOTAS MODIFICADAS: ${formData.notes}`);
+        if (formData.status !== selectedLead.status) changes.push(`Estado: ${STATUS_LABELS[selectedLead.status]} -> ${STATUS_LABELS[formData.status]}`);
+        if (formData.interestedVehicleModel !== selectedLead.interestedVehicleModel) changes.push(`Vehículo: ${selectedLead.interestedVehicleModel || 'N/A'} -> ${formData.interestedVehicleModel || 'N/A'}`);
+
+        if (changes.length > 0) {
+          newHistory.unshift({
+            date: new Date(),
+            action: `CAMBIOS REALIZADOS - ${changes.join(' / ')}`,
+            user: seller?.name || 'Sistema'
+          });
+        }
+
         await updateDoc(doc(db, 'leads', selectedLead.id), {
           ...formData,
           gender: formData.gender || null,
@@ -207,9 +230,16 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
           budget: Number(formData.budget),
           downPayment: Number(formData.downPayment),
           interestedVehicleYear: Number(formData.interestedVehicleYear),
-          updatedAt: serverTimestamp()
+          updatedAt: serverTimestamp(),
+          history: newHistory
         });
       } else {
+        const initialHistory = [{
+          date: new Date(),
+          action: 'Prospecto creado',
+          user: seller?.name || 'Sistema'
+        }];
+
         await addDoc(collection(db, 'leads'), {
           ...formData,
           gender: formData.gender || null,
@@ -221,13 +251,14 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
           createdBy: seller?.id || 'anonymous',
           sellerName: seller?.name || 'Vendedor',
           createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
+          updatedAt: serverTimestamp(),
+          history: initialHistory
         });
       }
       setIsModalOpen(false);
       resetForm();
     } catch (error) {
-      console.error("Error saving lead", error);
+      handleFirestoreError(error, OperationType.WRITE, 'leads');
     }
   };
 
@@ -249,6 +280,7 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
       status: 'new'
     });
     setSelectedLead(null);
+    setShowHistory(false);
   };
 
   const openEditModal = (lead: Lead) => {
@@ -439,76 +471,79 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
             <table className="w-full">
               <thead>
                 <tr className="text-left text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50">
-                  <th className="px-8 py-4">Cliente</th>
-                  <th className="px-8 py-4">Ubicación</th>
-                  <th className="px-8 py-4">Ficha de Venta</th>
-                  <th className="px-8 py-4">Finanzas</th>
-                  <th className="px-8 py-4">Asesor</th>
-                  <th className="px-8 py-4">Estado</th>
-                  <th className="px-8 py-4 text-center">Eliminar</th>
-                  <th className="px-8 py-4 text-right">Acción</th>
+                  <th className="px-4 md:px-8 py-4">Cliente</th>
+                  <th className="px-8 py-4 hidden lg:table-cell">Ubicación</th>
+                  <th className="px-4 md:px-8 py-4">Interés</th>
+                  <th className="px-8 py-4 hidden sm:table-cell">Finanzas</th>
+                  <th className="px-8 py-4 hidden md:table-cell">Asesor</th>
+                  <th className="px-4 md:px-8 py-4">Estado</th>
+                  {seller?.role === 'admin' && <th className="px-8 py-4 text-center hidden sm:table-cell">Eliminar</th>}
+                  <th className="px-4 md:px-8 py-4 text-right">Acción</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {filteredLeads.map((lead) => (
                   <tr key={lead.id} className="hover:bg-slate-50/30 transition-colors group">
-                    <td className="px-8 py-4">
-                      <p className="font-bold text-slate-800">{lead.customerName}</p>
-                      <div className="flex items-center gap-2 text-xs text-slate-400 mt-1">
-                        <Phone size={12} /> {lead.phone}
+                    <td className="px-4 md:px-8 py-4">
+                      <p className="font-bold text-slate-800 text-sm md:text-base">{lead.customerName}</p>
+                      <div className="flex items-center gap-2 text-[10px] md:text-xs text-slate-400 mt-1">
+                        <Phone size={10} /> {lead.phone}
                       </div>
                     </td>
-                    <td className="px-8 py-4">
+                    <td className="px-8 py-4 hidden lg:table-cell">
                       <div className="flex items-center gap-2 text-sm text-slate-600">
                         <MapPin size={14} className="text-slate-400" />
                         {lead.city || 'No especificada'}
                       </div>
                     </td>
-                    <td className="px-8 py-4">
-                      <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
-                        <Car size={14} className="text-indigo-500" />
-                        {lead.interestedVehicleModel || 'Cualquiera'} {lead.interestedVehicleYear ? `(${lead.interestedVehicleYear})` : ''}
+                    <td className="px-4 md:px-8 py-4">
+                      <div className="flex items-center gap-2 text-xs md:text-sm font-bold text-slate-700">
+                        <Car size={14} className="text-indigo-500 shrink-0" />
+                        <span className="truncate max-w-[100px] sm:max-w-none">
+                          {lead.interestedVehicleModel || 'Cualquiera'} {lead.interestedVehicleYear ? `(${lead.interestedVehicleYear})` : ''}
+                        </span>
                       </div>
-                      <div className="text-[10px] text-slate-400 font-bold uppercase tracking-tight mt-1">
-                        Origen: {lead.source || 'No especificado'}
+                      <div className="text-[9px] md:text-[10px] text-slate-400 font-bold uppercase tracking-tight mt-1 hidden sm:block">
+                         {lead.source || 'Sin origen'}
                       </div>
                     </td>
-                    <td className="px-8 py-4">
+                    <td className="px-8 py-4 hidden sm:table-cell">
                       <div className="space-y-1">
-                        <p className="text-xs font-bold text-emerald-600">Pres: ${lead.budget?.toLocaleString() || '0'}</p>
+                        <p className="text-xs font-bold text-emerald-600">${lead.budget?.toLocaleString() || '0'}</p>
                         <p className="text-[10px] text-slate-400 font-bold uppercase">Eng: ${lead.downPayment?.toLocaleString() || '0'}</p>
                       </div>
                     </td>
-                    <td className="px-8 py-4">
+                    <td className="px-8 py-4 hidden md:table-cell">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-[9px] font-black text-indigo-600 border border-indigo-100 shadow-sm shrink-0">
                           {lead.sellerName?.substring(0, 2).toUpperCase() || 'V'}
                         </div>
                         <div>
                           <p className="text-xs font-black text-slate-700 tracking-tight leading-none mb-0.5">{lead.sellerName || 'General'}</p>
-                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Vendedor</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-8 py-4">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase italic tracking-wider ${STATUS_COLORS[lead.status]}`}>
+                    <td className="px-4 md:px-8 py-4">
+                      <span className={`px-2 md:px-3 py-1 rounded-full text-[9px] md:text-[10px] font-black uppercase italic tracking-wider whitespace-nowrap ${STATUS_COLORS[lead.status]}`}>
                         {STATUS_LABELS[lead.status]}
                       </span>
                     </td>
-                    <td className="px-8 py-4 text-center">
-                      <button 
-                        onClick={(e) => handleDeleteLead(lead.id, e)}
-                        className={`p-2 rounded-lg transition-all ${
-                          isDeleting === lead.id 
-                            ? 'bg-rose-500 text-white animate-pulse' 
-                            : 'text-slate-300 hover:bg-rose-50 hover:text-rose-500'
-                        }`}
-                        title="Eliminar Prospecto"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                    <td className="px-8 py-4 text-right">
+                    {seller?.role === 'admin' && (
+                      <td className="px-8 py-4 text-center hidden sm:table-cell">
+                        <button 
+                          onClick={(e) => handleDeleteLead(lead.id, e)}
+                          className={`p-2 rounded-lg transition-all ${
+                            isDeleting === lead.id 
+                              ? 'bg-rose-500 text-white animate-pulse' 
+                              : 'text-slate-300 hover:bg-rose-50 hover:text-rose-500'
+                          }`}
+                          title="Eliminar Prospecto"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    )}
+                    <td className="px-4 md:px-8 py-4 text-right">
                       <button 
                         onClick={() => openEditModal(lead)}
                         className="p-2 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600 rounded-full transition-all"
@@ -539,7 +574,23 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
                   <h2 className="text-2xl font-black uppercase tracking-tighter">
                     {selectedLead ? 'Editar Prospecto' : 'Nuevo Prospecto'}
                   </h2>
-                  <p className="text-indigo-300 text-xs font-bold uppercase tracking-widest mt-1">Información de Venta</p>
+                  <div className="flex items-center gap-4 mt-1">
+                    <p className="text-indigo-300 text-xs font-bold uppercase tracking-widest">Información de Venta</p>
+                    {selectedLead && (
+                      <button 
+                        type="button"
+                        onClick={() => setShowHistory(!showHistory)}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase transition-all ${
+                          showHistory 
+                            ? 'bg-indigo-500 text-white' 
+                            : 'bg-white/10 text-white/70 hover:bg-white/20'
+                        }`}
+                      >
+                        <History size={12} />
+                        {showHistory ? 'Volver a Edición' : 'Ver Historial'}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <button 
                   onClick={() => setIsModalOpen(false)}
@@ -549,7 +600,36 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
                 </button>
               </div>
 
-              <form onSubmit={handleSubmit} className="p-8 space-y-6 overflow-y-auto">
+              {showHistory ? (
+                <div className="flex-1 overflow-y-auto p-8 space-y-6">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Historial de Actividad</h3>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest italic">Timeline de Cambios</div>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    {!selectedLead?.history || selectedLead.history.length === 0 ? (
+                      <div className="py-12 text-center text-slate-400 italic">No hay historial registrado para este prospecto.</div>
+                    ) : (
+                      selectedLead.history.map((entry, idx) => (
+                        <div key={idx} className="relative pl-8 pb-4 border-l-2 border-slate-100 last:pb-0">
+                          <div className="absolute left-[-9px] top-0 w-4 h-4 rounded-full bg-white border-2 border-indigo-500 shadow-sm" />
+                          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100/50">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-black text-indigo-600 uppercase tracking-tighter">
+                                {entry.date?.toDate ? entry.date.toDate().toLocaleString() : new Date(entry.date).toLocaleString()}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-400 italic">Por: {entry.user || 'Sistema'}</span>
+                            </div>
+                            <p className="text-xs font-medium text-slate-700 leading-relaxed">{entry.action}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={handleSubmit} className="p-8 space-y-6 overflow-y-auto">
                 {duplicates.length > 0 && (
                   <div className="bg-amber-50 border border-amber-200 p-4 rounded-3xl flex items-start gap-4">
                     <AlertTriangle className="text-amber-500 shrink-0 mt-0.5" size={20} />
@@ -770,6 +850,7 @@ export default function Leads({ globalSearchQuery, seller }: LeadsProps) {
                   </div>
                 </div>
               </form>
+              )}
             </motion.div>
           </div>
         )}

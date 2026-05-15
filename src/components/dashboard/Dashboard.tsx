@@ -21,7 +21,7 @@ import {
   Area
 } from 'recharts';
 import { collection, query, onSnapshot, where, Timestamp } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { Seller } from '../../types';
 
 const data = [
@@ -59,6 +59,7 @@ export default function Dashboard({ globalSearchQuery, seller }: { globalSearchQ
     leadsMes: 0,
     ventasMes: 0
   });
+  const [sellerRanking, setSellerRanking] = useState<{name: string, leads: number, sales: number}[]>([]);
 
   useEffect(() => {
     const today = new Date();
@@ -87,6 +88,30 @@ export default function Dashboard({ globalSearchQuery, seller }: { globalSearchQ
         leadsMes,
         ventasMes
       });
+
+      // Calculate ranking for admin
+      if (seller?.role === 'admin') {
+        const rankingMap: Record<string, { leads: number, sales: number }> = {};
+        
+        allLeads.forEach((lead: any) => {
+          const sName = lead.sellerName || 'Sin Asignar';
+          if (!rankingMap[sName]) {
+            rankingMap[sName] = { leads: 0, sales: 0 };
+          }
+          rankingMap[sName].leads++;
+          if (lead.status === 'closed-won') {
+            rankingMap[sName].sales++;
+          }
+        });
+
+        const rankingArray = Object.entries(rankingMap)
+          .map(([name, data]) => ({ name, ...data }))
+          .sort((a, b) => b.sales - a.sales || b.leads - a.leads);
+        
+        setSellerRanking(rankingArray);
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'leads');
     });
 
     return () => unsubscribe();
@@ -136,9 +161,9 @@ export default function Dashboard({ globalSearchQuery, seller }: { globalSearchQ
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-8">
+      <div className={`grid grid-cols-1 ${seller?.role === 'admin' ? 'lg:grid-cols-3' : ''} gap-8`}>
         {/* Weekly Activity */}
-        <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+        <div className={`bg-white p-8 rounded-3xl border border-slate-100 shadow-sm ${seller?.role === 'admin' ? 'lg:col-span-2' : ''}`}>
           <div className="flex items-center justify-between mb-8">
             <div>
               <h2 className="text-lg font-bold text-slate-800">Leads Recientes</h2>
@@ -171,6 +196,59 @@ export default function Dashboard({ globalSearchQuery, seller }: { globalSearchQ
             </ResponsiveContainer>
           </div>
         </div>
+
+        {/* Seller Ranking (Admin Only) */}
+        {seller?.role === 'admin' && (
+          <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="bg-amber-50 p-2 rounded-xl border border-amber-100">
+                <TrendingUp className="text-amber-600" size={20} />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Ranking de Vendedores</h2>
+                <p className="text-xs text-slate-400 font-bold uppercase tracking-tight italic">Performance Total</p>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {sellerRanking.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 italic text-sm">No hay actividad para mostrar.</div>
+              ) : (
+                sellerRanking.slice(0, 5).map((s, idx) => (
+                  <div key={idx} className="flex items-center gap-4 group">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs ${
+                      idx === 0 ? 'bg-amber-100 text-amber-700' :
+                      idx === 1 ? 'bg-slate-100 text-slate-600' :
+                      idx === 2 ? 'bg-orange-50 text-orange-700' :
+                      'bg-slate-50 text-slate-400'
+                    }`}>
+                      {idx + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-sm font-bold text-slate-700 truncate">{s.name}</p>
+                        <p className="text-xs font-black text-indigo-600">{s.sales} <span className="text-[10px] text-slate-400 font-normal uppercase">Ventas</span></p>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-50 rounded-full overflow-hidden flex">
+                        <div 
+                          className="h-full bg-indigo-500 transition-all duration-1000" 
+                          style={{ width: `${Math.min(100, (s.leads / (sellerRanking[0]?.leads || 1)) * 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-[9px] text-slate-400 font-bold uppercase mt-1 tracking-tighter">Seguimiento: {s.leads} leads</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {sellerRanking.length > 5 && (
+              <button className="w-full mt-8 py-3 text-xs font-bold text-slate-400 hover:text-indigo-600 border border-dashed border-slate-200 rounded-2xl transition-all">
+                Ver ranking completo
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

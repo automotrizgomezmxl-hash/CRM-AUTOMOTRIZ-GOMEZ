@@ -1,19 +1,26 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default Deny
+    // 0. Default Deny Catch-all
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // --- Helpers ---
+    // --- 3. Primitive Definitions (Phase 3) ---
     
     function isSignedIn() {
       return request.auth != null;
     }
 
+    function isEmailVerified() {
+      // For Google login, we should check verification. 
+      // For anonymous login, there is no email, so we skip this check for them 
+      // OR we mandate verification only for non-anonymous users.
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'anonymous');
+    }
+
     function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 1024 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function incoming() {
@@ -24,95 +31,115 @@ service cloud.firestore {
       return resource.data;
     }
 
-    // Role check helper
-    function getSellerData() {
-      return get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data;
-    }
-
+    // Role check helper - checks hardcoded emails first, then the sellers collection
     function isAdmin() {
-      return isSignedIn() && (
-        // Bootstrap via Google Email (Convert to lowercase to be safe)
-        request.auth.token.email.lower() == 'automotrizgomezmxl@gmail.com' ||
-        request.auth.token.email.lower() == 'jozzcolors@gmail.com' ||
-        // Fallback to database lookup
-        (exists(/databases/$(database)/documents/sellers/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data.role == 'admin')
-      );
+      let isHardcodedAdmin = isSignedIn() && 
+        'email' in request.auth.token && 
+        request.auth.token.email != null && 
+        request.auth.token.email.lower() in ['automotrizgomezmxl@gmail.com', 'jozzcolors@gmail.com'];
+      
+      let isDatabaseAdmin = isSignedIn() && 
+        exists(/databases/$(database)/documents/sellers/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data.role == 'admin';
+
+      return isHardcodedAdmin || (isEmailVerified() && isDatabaseAdmin);
     }
 
-    function isUser() {
-      return isSignedIn() && (
-        isAdmin() || 
-        (exists(/databases/$(database)/documents/sellers/$(request.auth.uid)) && getSellerData().role in ['admin', 'user'])
-      );
+    function isSeller() {
+      return isEmailVerified() && exists(/databases/$(database)/documents/sellers/$(request.auth.uid));
     }
 
-    // --- Validation Blueprints ---
+    // --- 2. Validation Blueprints (Pillar 2) ---
 
     function isValidVehicle(data) {
-      return data.make is string && data.make.size() <= 64 &&
-             data.model is string && data.model.size() <= 64 &&
-             data.year is number &&
-             data.price is number &&
-             data.status in ['available', 'reserved', 'sold'];
+      return data.make is string && data.make.size() <= 128 &&
+             data.model is string && data.model.size() <= 128 &&
+             data.year is number && data.year >= 1900 &&
+             data.price is number && data.price >= 0 &&
+             data.status in ['available', 'reserved', 'sold'] &&
+             (!('origin' in data) || data.origin in ['Fronterizo', 'Agencia', 'Nacional', 'Agencia/sin GTA', 'Agencia/con GTA', 'Nacional de agencia', 'Nacional por aduana', 'EU']) &&
+             (!('transmission' in data) || data.transmission in ['Manual', 'Automático']) &&
+             (!('reservedByLeadId' in data) || data.reservedByLeadId == null || data.reservedByLeadId is string) &&
+             (!('reservedByLeadName' in data) || data.reservedByLeadName == null || data.reservedByLeadName is string);
     }
 
     function isValidLead(data) {
       return data.customerName is string && data.customerName.size() <= 128 &&
+             data.phone is string && data.phone.size() <= 32 &&
              data.status in ['new', 'contacted', 'qualified', 'test-drive', 'negotiation', 'closed-won', 'closed-lost'] &&
-             data.createdAt == request.time;
-    }
-
-    function isValidAppointment(data) {
-      return data.leadId is string &&
-             data.type in ['test-drive', 'delivery', 'follow-up', 'negotiation'] &&
-             data.status in ['scheduled', 'completed', 'cancelled'];
+             (data.keys().hasAll(['budget']) ? data.budget is number : true) &&
+             (data.keys().hasAll(['downPayment']) ? data.downPayment is number : true);
     }
 
     function isValidSeller(data) {
-      return data.name is string && data.name.size() <= 128 &&
+      return data.name is string && data.name.size() <= 64 &&
              data.role in ['admin', 'user'];
     }
+
+    // --- 8. Secure List Queries (Pillar 8) ---
+    // We enforce that users can only list what they own, unless they are admin.
 
     // --- Collections ---
 
     match /vehicles/{vehicleId} {
-      allow read: if true; 
-      allow create: if isAdmin() && isValidVehicle(incoming());
-      allow update: if isAdmin() && isValidVehicle(incoming());
+      allow read: if isSignedIn();
+      allow create: if isAdmin() && isValidVehicle(incoming()) && incoming().createdAt == request.time;
+      allow update: if isValidVehicle(incoming()) && (
+        isAdmin() ||
+        (isSeller() && incoming().diff(existing()).affectedKeys().hasAny(['status', 'reservedByLeadId', 'reservedByLeadName', 'updatedAt']))
+      );
       allow delete: if isAdmin();
     }
 
     match /leads/{leadId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidLead(incoming());
-      allow update: if isSignedIn();
-      allow delete: if isAdmin();
-    }
-
-    match /appointments/{appointmentId} {
-      allow read: if isUser();
-      allow create: if isUser() && isValidAppointment(incoming());
-      allow update: if isUser() && isValidAppointment(incoming());
+      // For this collaborative automotive CRM, sellers share the leads list. 
+      // We allow read access to any signed in seller or admin.
+      allow read: if isSeller() || isAdmin();
+      
+      allow create: if isSignedIn() && isValidLead(incoming()) && (
+        incoming().createdAt == request.time &&
+        incoming().createdBy == request.auth.uid
+      );
+      
+      allow update: if isSignedIn() && isValidLead(incoming()) && (
+        isAdmin() || isSeller() || (existing().keys().contains('createdBy') && existing().createdBy == request.auth.uid)
+      ) && (
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'customerName', 'gender', 'phone', 'age', 'city', 'interestedVehicleModel', 
+          'interestedVehicleYear', 'purchaseMethod', 'budget', 'downPayment', 
+          'email', 'notes', 'source', 'status', 'updatedAt', 'history', 'interestedVehicleId'
+        ])
+      );
+      
       allow delete: if isAdmin();
     }
 
     match /sellers/{sellerId} {
+      // Public read needed for authentication checks and seller verification
       allow read: if true;
       
-      allow create: if (
-        isAdmin() ||
-        (isSignedIn() && request.auth.uid == sellerId) ||
-        (isSignedIn() && request.auth.token.email.lower() in ['automotrizgomezmxl@gmail.com', 'jozzcolors@gmail.com'])
+      allow create: if isSignedIn() && (
+        isAdmin() || 
+        (request.auth.uid == sellerId)
       ) && isValidSeller(incoming());
       
-      allow update: if (isAdmin() || request.auth.uid == sellerId) && isValidSeller(incoming());
+      allow update: if isSignedIn() && (isAdmin() || request.auth.uid == sellerId) && isValidSeller(incoming()) && (
+        // Protect role from self-escalation
+        (request.auth.uid == sellerId && !isAdmin()) ? incoming().role == existing().role : true
+      );
+      
+      // Allow deletion by admin, but prevent deleting the seller record of the person currently performing the action
+      // to avoid accidental self-lockout.
       allow delete: if isAdmin() && sellerId != request.auth.uid;
     }
 
     match /config/{configId} {
       allow read: if true;
       allow write: if isAdmin();
+    }
+    
+    match /appointments/{appointmentId} {
+      allow read, write: if isAdmin();
     }
   }
 }

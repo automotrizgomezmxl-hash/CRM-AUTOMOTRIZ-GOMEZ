@@ -29,7 +29,7 @@ import {
   uploadBytes, 
   getDownloadURL 
 } from 'firebase/storage';
-import { db, storage, auth } from '../../lib/firebase';
+import { db, storage, auth, handleFirestoreError, OperationType } from '../../lib/firebase';
 import { Vehicle, Seller, UserRole } from '../../types';
 
 interface SettingsProps {
@@ -68,6 +68,8 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
       });
       
       setVendedores(Array.from(uniqueMap.values()));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'sellers');
     });
     return () => unsubscribe();
   }, []);
@@ -82,7 +84,7 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
       setIsSellerModalOpen(false);
       setSellerFormData({ name: '', role: 'user' });
     } catch (error) {
-      console.error("Error adding seller", error);
+      handleFirestoreError(error, OperationType.WRITE, 'sellers');
     }
   };
 
@@ -99,7 +101,13 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
       setIsDeleteModalOpen(false);
       setSellerToDelete(null);
     } catch (error: any) {
-      setToast({ message: 'Error: ' + error.message, type: 'error' });
+      setToast({ message: 'Error: Permisos insuficientes o error de red', type: 'error' });
+      try {
+        handleFirestoreError(error, OperationType.DELETE, `sellers/${sellerToDelete.id}`);
+      } catch (e) {
+        // Log caught to avoid crashing the click handler further
+        console.error(e);
+      }
     } finally {
       setIsDeleting(false);
     }
@@ -123,6 +131,8 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
         };
       }) as Vehicle[];
       setInventoryItems(vehicleData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'vehicles');
     });
     return () => unsubscribe();
   }, []);
@@ -141,6 +151,8 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
     vin: '',
     price: '',
     inShowroom: 'SI',
+    origin: 'Agencia',
+    transmission: 'Automático',
     entryDate: new Date().toISOString().split('T')[0],
     notes: '',
     imageUrl: ''
@@ -199,6 +211,12 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
     return url;
   };
 
+  const formatCurrency = (value: string | number) => {
+    if (value === undefined || value === null || value === '') return '';
+    const num = typeof value === 'string' ? value.replace(/\D/g, '') : Math.floor(Number(value)).toString();
+    return num.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  };
+
   const handleAddVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -248,12 +266,14 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
         make: 'Automotriz Gomez', 
         model: vehicleFormData.model,
         year: Number(vehicleFormData.year),
-        price: Number(vehicleFormData.price),
+        price: Number(vehicleFormData.price.toString().replace(/,/g, '')),
         mileage: Number(vehicleFormData.mileage),
         engine: vehicleFormData.engine,
         cylinders: Number(vehicleFormData.cylinders),
         vin: vehicleFormData.vin,
         inShowroom: vehicleFormData.inShowroom === 'SI',
+        origin: vehicleFormData.origin,
+        transmission: vehicleFormData.transmission,
         entryDate: vehicleFormData.entryDate,
         notes: vehicleFormData.notes,
         imageUrl: finalImageUrl,
@@ -273,7 +293,7 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
       setIsVehicleModalOpen(false);
       resetVehicleForm();
     } catch (error: any) {
-      console.error("Error saving vehicle", error);
+      handleFirestoreError(error, OperationType.WRITE, 'vehicles');
       setModalError(error.message || 'Error inesperado al guardar el vehículo.');
     } finally {
       setUploading(false);
@@ -315,8 +335,10 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
       engine: vehicle.engine || '',
       cylinders: vehicle.cylinders?.toString() || '',
       vin: vehicle.vin,
-      price: vehicle.price.toString(),
+      price: formatCurrency(vehicle.price),
       inShowroom: vehicle.inShowroom ? 'SI' : 'NO',
+      origin: vehicle.origin || 'Agencia',
+      transmission: vehicle.transmission || 'Automático',
       entryDate: vehicle.entryDate || new Date().toISOString().split('T')[0],
       notes: vehicle.notes || '',
       imageUrl: vehicle.imageUrl || ''
@@ -342,6 +364,8 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
       vin: '',
       price: '',
       inShowroom: 'SI',
+      origin: 'Agencia',
+      transmission: 'Automático',
       entryDate: new Date().toISOString().split('T')[0],
       notes: '',
       imageUrl: ''
@@ -612,12 +636,15 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Precio</label>
                     <div className="relative">
                       <input 
-                        type="number" 
+                        type="text" 
                         required
                         value={vehicleFormData.price}
-                        onChange={(e) => setVehicleFormData({...vehicleFormData, price: e.target.value})}
+                        onChange={(e) => {
+                          const formatted = formatCurrency(e.target.value);
+                          setVehicleFormData({...vehicleFormData, price: formatted});
+                        }}
                         placeholder="0.00"
-                        className="w-full pl-10 pr-5 py-3.5 bg-slate-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-inner"
+                        className="w-full pl-10 pr-5 py-3.5 bg-slate-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-inner font-bold"
                       />
                       <span className="absolute left-4 top-3.5 text-emerald-600 font-bold">$</span>
                     </div>
@@ -631,6 +658,34 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
                     >
                       <option value="SI">SI</option>
                       <option value="NO">NO</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Origen</label>
+                    <select 
+                      value={vehicleFormData.origin}
+                      onChange={(e) => setVehicleFormData({...vehicleFormData, origin: e.target.value as any})}
+                      className="w-full px-5 py-3.5 bg-slate-50 border-none rounded-2xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-inner"
+                    >
+                      <option value="Fronterizo">Fronterizo</option>
+                      <option value="Agencia">Agencia</option>
+                      <option value="Nacional">Nacional</option>
+                      <option value="Agencia/sin GTA">Agencia/sin GTA</option>
+                      <option value="Agencia/con GTA">Agencia/con GTA</option>
+                      <option value="Nacional de agencia">Nacional de agencia</option>
+                      <option value="Nacional por aduana">Nacional por aduana</option>
+                      <option value="EU">EU</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Transmisión</label>
+                    <select 
+                      value={vehicleFormData.transmission}
+                      onChange={(e) => setVehicleFormData({...vehicleFormData, transmission: e.target.value as any})}
+                      className="w-full px-5 py-3.5 bg-slate-50 border-none rounded-2xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none transition-all shadow-inner"
+                    >
+                      <option value="Manual">Manual</option>
+                      <option value="Automático">Automático</option>
                     </select>
                   </div>
                 </div>
@@ -797,9 +852,9 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
           <table className="w-full">
             <thead>
               <tr className="text-left text-[10px] font-black text-slate-400 uppercase tracking-widest bg-slate-50/50">
-                <th className="px-8 py-4">Nombre</th>
-                <th className="px-8 py-4">Rol</th>
-                <th className="px-8 py-4 text-right">Acciones</th>
+                <th className="px-4 md:px-8 py-4">Nombre</th>
+                <th className="px-8 py-4 hidden sm:table-cell">Rol</th>
+                <th className="px-4 md:px-8 py-4 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -812,39 +867,40 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
               ) : (
                 vendedores.map((v) => (
                   <tr key={v.id} className="hover:bg-slate-50/30 transition-colors">
-                    <td className="px-8 py-4">
+                    <td className="px-4 md:px-8 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs uppercase">
+                        <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs uppercase shrink-0">
                           {v.name[0]}
                         </div>
-                        <div className="flex flex-col">
+                        <div className="flex flex-col min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="font-black text-slate-700 text-sm">{v.name}</span>
+                            <span className="font-black text-slate-700 text-sm truncate">{v.name}</span>
                             {auth.currentUser?.uid === v.id && (
-                              <span className="bg-emerald-100 text-emerald-700 text-[8px] font-black uppercase px-2 py-0.5 rounded-full tracking-tighter shadow-sm">Tú</span>
+                              <span className="bg-emerald-100 text-emerald-700 text-[8px] font-black uppercase px-2 py-0.5 rounded-full tracking-tighter shadow-sm shrink-0">Tú</span>
                             )}
                           </div>
-                          <span className="text-[10px] text-slate-400 font-mono italic">ID: {v.id.substring(0, 6)}...</span>
+                          <span className="text-[10px] text-slate-400 font-mono italic hidden sm:inline">ID: {v.id.substring(0, 6)}...</span>
+                          <span className="text-[9px] text-indigo-500 font-bold uppercase sm:hidden">{v.role === 'admin' ? 'Administrador' : 'Vendedor'}</span>
                         </div>
                       </div>
                     </td>
-                    <td className="px-8 py-4">
+                    <td className="px-8 py-4 hidden sm:table-cell">
                       <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase italic ${
                         v.role === 'admin' ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-500'
                       }`}>
                         {v.role === 'admin' ? 'Administrador' : 'Vendedor'}
                       </span>
                     </td>
-                    <td className="px-8 py-4 text-right">
+                    <td className="px-4 md:px-8 py-4 text-right">
                       <div className="flex justify-end gap-2">
                         <button 
                           type="button"
                           disabled={auth.currentUser?.uid === v.id || isDeleting}
                           onClick={() => handleDeleteSeller(v.id, v.name)}
-                          className="w-12 h-12 flex items-center justify-center text-white bg-rose-600 rounded-2xl transition-all active:scale-90 shadow-lg hover:bg-rose-700 disabled:opacity-20 disabled:grayscale disabled:cursor-not-allowed"
+                          className="w-10 h-10 md:w-12 md:h-12 flex items-center justify-center text-white bg-rose-600 rounded-2xl transition-all active:scale-90 shadow-lg hover:bg-rose-700 disabled:opacity-20 disabled:grayscale disabled:cursor-not-allowed shrink-0"
                           title={auth.currentUser?.uid === v.id ? "NO PUEDES ELIMINARTE A TI MISMO" : "ELIMINAR VENDEDOR"}
                         >
-                          <Trash2 size={24} />
+                          <Trash2 size={18} className="md:size-24" />
                         </button>
                       </div>
                     </td>
@@ -860,59 +916,52 @@ export default function Settings({ logoUrl, setLogoUrl, seller }: SettingsProps)
       <section className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
         <div className="p-8 border-b border-slate-50 flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Gestión de Inventario</h2>
-            <p className="text-sm text-slate-400">Control total de tus unidades y catálogos</p>
+            <h2 className="text-xl font-black text-slate-800 uppercase tracking-tighter shrink-0">Gestión de Inventario</h2>
+            <p className="text-sm text-slate-400 hidden sm:block">Control total de tus unidades y catálogos</p>
           </div>
           <button 
             onClick={() => setIsVehicleModalOpen(true)}
-            className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full text-xs font-bold transition-all shadow-lg active:scale-95"
+            className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full text-[10px] font-bold transition-all shadow-lg active:scale-95 whitespace-nowrap"
           >
             <Plus size={16} />
             <span>Agregar Auto</span>
           </button>
         </div>
         
-        <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="p-4 md:p-8 grid grid-cols-1 md:grid-cols-2 gap-4">
           {inventoryItems.length === 0 ? (
             <div className="col-span-full py-20 text-center text-slate-400 font-medium">
               No hay vehículos registrados en el inventario.
             </div>
           ) : (
             inventoryItems.map((item) => (
-              <div key={item.id} className="flex items-center gap-4 p-4 rounded-2xl border border-slate-50 hover:border-indigo-100 transition-all group">
-                <div className="relative w-20 h-20 rounded-xl overflow-hidden shrink-0 bg-slate-100">
+              <div key={item.id} className="flex items-center gap-3 md:gap-4 p-3 md:p-4 rounded-2xl border border-slate-50 hover:border-indigo-100 transition-all group overflow-hidden">
+                <div className="relative w-16 h-16 md:w-20 md:h-20 rounded-xl overflow-hidden shrink-0 bg-slate-100">
                   {item.imageUrl ? (
                     <img src={item.imageUrl} alt={item.model} className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-slate-300">
-                      <Car size={32} />
+                      <Car size={24} />
                     </div>
                   )}
                   <button className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                    <Camera size={20} className="text-white" />
+                    <Camera size={16} className="text-white" />
                   </button>
                 </div>
                 <div className="flex-1 min-w-0">
                   <h4 className="font-bold text-slate-800 text-sm truncate">{item.model}</h4>
                   <div className="flex items-center gap-2 mt-1">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">VIN: {item.vin?.slice(-6) || 'N/A'}</p>
-                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md ${item.inShowroom ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
+                    <p className="text-[9px] md:text-[10px] text-slate-400 font-bold uppercase tracking-widest truncate">VIN: {item.vin?.slice(-6) || 'N/A'}</p>
+                    <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md shrink-0 ${item.inShowroom ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
                       {item.inShowroom ? 'En Piso' : 'Bodega'}
                     </span>
                   </div>
-                  <div className="mt-2 flex gap-2">
-                    <button 
-                      onClick={() => openEditVehicleModal(item)}
-                      className="text-[10px] bg-slate-100 hover:bg-indigo-100 hover:text-indigo-600 text-slate-600 px-3 py-1 rounded-full font-bold transition-all"
-                    >
-                      Modificar
-                    </button>
-                    <button 
-                      onClick={() => item.id && handleDeleteVehicle(item.id, item.model)}
-                      className="text-[10px] bg-rose-600 hover:bg-rose-700 text-white px-4 py-1.5 rounded-full font-bold transition-all shadow-sm active:scale-95"
-                    >
-                      Eliminar
-                    </button>
+                  <div className="mt-2 flex items-center justify-between">
+                    <p className="text-xs font-black text-emerald-600">${item.price?.toLocaleString()}</p>
+                    <div className="flex gap-2">
+                       <button onClick={() => openEditVehicleModal(item)} className="p-1.5 text-indigo-500 hover:bg-indigo-50 rounded-lg"><Save size={14} /></button>
+                       <button onClick={() => handleDeleteVehicle(item.id, item.model)} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg"><Trash2 size={14} /></button>
+                    </div>
                   </div>
                 </div>
               </div>

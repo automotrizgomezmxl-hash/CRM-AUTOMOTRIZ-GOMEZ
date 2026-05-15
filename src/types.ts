@@ -17,8 +17,12 @@ export interface Vehicle {
   entryDate?: any;
   inShowroom?: boolean;
   color: string;
+  origin?: 'Fronterizo' | 'Agencia' | 'Nacional' | 'Agencia/sin GTA' | 'Agencia/con GTA' | 'Nacional de agencia' | 'Nacional por aduana' | 'EU';
+  transmission?: 'Manual' | 'Automático';
   imageUrl?: string;
   notes?: string;
+  reservedByLeadId?: string;
+  reservedByLeadName?: string;
   createdAt: any;
   updatedAt?: any;
 }
@@ -30,6 +34,12 @@ export interface Seller {
   email?: string;
   role: UserRole;
   active?: boolean;
+}
+
+export interface LeadHistoryEntry {
+  date: any;
+  action: string;
+  user?: string;
 }
 
 export interface Lead {
@@ -54,6 +64,7 @@ export interface Lead {
   sellerName?: string;
   createdAt: any;
   updatedAt: any;
+  history?: LeadHistoryEntry[];
 }
 
 export interface Appointment {
